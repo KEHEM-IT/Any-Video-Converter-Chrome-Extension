@@ -1,39 +1,47 @@
-// Background service worker for conversion
+// Background service worker
 let conversionInProgress = false;
+let converterWindow = null;
 
+// Listen for conversion status updates
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'startConversion') {
     conversionInProgress = true;
-    // Keep service worker alive during conversion
-    const keepAlive = setInterval(() => {
-      chrome.runtime.getPlatformInfo();
-    }, 20000);
-    
-    // Store the interval ID
-    chrome.storage.local.set({ keepAliveInterval: keepAlive });
     sendResponse({ success: true });
   } else if (request.action === 'conversionComplete') {
     conversionInProgress = false;
-    chrome.storage.local.get(['keepAliveInterval'], (result) => {
-      if (result.keepAliveInterval) {
-        clearInterval(result.keepAliveInterval);
-      }
-    });
     sendResponse({ success: true });
   } else if (request.action === 'isConversionInProgress') {
     sendResponse({ inProgress: conversionInProgress });
+  } else if (request.action === 'openConverterWindow') {
+    // Open a hidden window for conversion
+    if (!converterWindow) {
+      chrome.windows.create({
+        url: 'converter.html',
+        type: 'popup',
+        width: 400,
+        height: 300,
+        focused: false
+      }, (window) => {
+        converterWindow = window;
+        sendResponse({ windowId: window.id });
+      });
+      return true;
+    } else {
+      sendResponse({ windowId: converterWindow.id });
+    }
+  } else if (request.action === 'closeConverterWindow') {
+    if (converterWindow) {
+      chrome.windows.remove(converterWindow.id);
+      converterWindow = null;
+    }
+    sendResponse({ success: true });
   }
   return true;
 });
 
-// Warn user before closing browser during conversion
+// Clean up when converter window is closed
 chrome.windows.onRemoved.addListener((windowId) => {
-  if (conversionInProgress) {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon48.png',
-      title: 'Conversion In Progress',
-      message: 'A file conversion is still running. Please wait for it to complete.'
-    });
+  if (converterWindow && converterWindow.id === windowId) {
+    converterWindow = null;
   }
 });

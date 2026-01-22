@@ -2,6 +2,7 @@
 let currentFile = null;
 let outputBlob = null;
 let isConverting = false;
+let converterWindowId = null;
 
 // DOM Elements
 const uploadArea = document.getElementById('uploadArea');
@@ -32,6 +33,10 @@ const AUDIO_FORMATS = ['mp3', 'wav', 'aac', 'flac', 'alac', 'ogg', 'm4a', 'amr']
 
 // Check if conversion is in progress on load
 chrome.runtime.sendMessage({ action: 'isConversionInProgress' }, (response) => {
+  if (chrome.runtime.lastError) {
+    console.log('Background script not ready:', chrome.runtime.lastError);
+    return;
+  }
   if (response && response.inProgress) {
     showProgress('Conversion in progress...');
   }
@@ -100,9 +105,9 @@ function handleFile(file) {
   
   // Set default output format
   if (isVideo) {
-    outputFormat.value = 'mp4';
-  } else {
     outputFormat.value = 'mp3';
+  } else {
+    outputFormat.value = 'ogg';
   }
 }
 
@@ -115,20 +120,44 @@ function formatBytes(bytes) {
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
 }
 
-// Create offscreen document if needed
-async function setupOffscreenDocument() {
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT']
+// Get converter window tab
+async function getConverterWindow() {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ action: 'openConverterWindow' }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      converterWindowId = response.windowId;
+      resolve(response.windowId);
+    });
   });
+}
 
-  if (existingContexts.length > 0) {
-    return;
-  }
-
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    reasons: ['AUDIO_PLAYBACK'],
-    justification: 'Processing audio/video conversion in background'
+// Send message to converter window
+async function sendToConverter(message) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Get all tabs in the converter window
+      const tabs = await chrome.tabs.query({ windowId: converterWindowId });
+      
+      if (tabs.length === 0) {
+        reject(new Error('Converter window not found'));
+        return;
+      }
+      
+      const tabId = tabs[0].id;
+      
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(response);
+      });
+    } catch (error) {
+      reject(error);
+    }
   });
 }
 
@@ -151,21 +180,24 @@ convertBtn.addEventListener('click', async () => {
     // Show progress
     progressSection.style.display = 'block';
     progressFill.style.width = '0%';
-    progressText.textContent = 'Initializing conversion...';
+    progressText.textContent = 'Opening converter window...';
     
-    // Setup offscreen document
-    await setupOffscreenDocument();
+    // Get converter window
+    await getConverterWindow();
+    
+    // Wait for window to load
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     const outputExt = outputFormat.value;
     const qualityLevel = quality.value;
     
-    progressText.textContent = 'Converting... This may take a while.';
+    progressText.textContent = 'Starting conversion... (Window will stay open in background)';
     
     // Start progress animation
     let progress = 0;
     const progressInterval = setInterval(() => {
       if (progress < 90) {
-        progress += Math.random() * 10;
+        progress += Math.random() * 5;
         progressFill.style.width = `${Math.min(progress, 90)}%`;
       }
     }, 1000);
@@ -173,9 +205,11 @@ convertBtn.addEventListener('click', async () => {
     // Read file as array buffer
     const fileData = await currentFile.arrayBuffer();
     
-    // Send to offscreen document for conversion
-    const response = await chrome.runtime.sendMessage({
-      action: 'convert',
+    progressText.textContent = 'Converting... You can close this popup now!';
+    
+    // Send to converter window
+    const response = await sendToConverter({
+      action: 'startConversion',
       data: {
         fileData: fileData,
         fileName: currentFile.name,
@@ -197,6 +231,9 @@ convertBtn.addEventListener('click', async () => {
     progressFill.style.width = '100%';
     progressText.textContent = 'Conversion complete!';
     
+    // Close converter window
+    chrome.runtime.sendMessage({ action: 'closeConverterWindow' });
+    
     setTimeout(() => {
       // Show result
       progressSection.style.display = 'none';
@@ -210,6 +247,9 @@ convertBtn.addEventListener('click', async () => {
   } catch (error) {
     console.error('Conversion error:', error);
     showError('Conversion failed: ' + error.message);
+    
+    // Close converter window on error
+    chrome.runtime.sendMessage({ action: 'closeConverterWindow' });
   } finally {
     isConverting = false;
     chrome.runtime.sendMessage({ action: 'conversionComplete' });

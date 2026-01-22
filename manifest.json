@@ -4,8 +4,7 @@
   "version": "1.0.0",
   "description": "Convert video and audio files to any format locally in your browser",
   "permissions": [
-    "storage",
-    "offscreen"
+    "storage"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -25,5 +24,11 @@
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["converter.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
