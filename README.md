@@ -7,7 +7,7 @@ A powerful Chrome extension that converts video and audio files to any format **
 - **Local Processing**: All conversions happen in your browser - no data leaves your computer
 - **Auto Format Detection**: Automatically detects uploaded file format
 - **Multiple Formats Supported**:
-  - **Video**: MP4, MOV, AVI, MKV, WebM, FLV, WMV, MPEG, MPG, M4V, 3GP
+  - **Video**: MP4, MOV, AVI, MKV, WebM, FLV, WMV, MPEG, MPG, M4V, 3GP, TS
   - **Audio**: MP3, WAV, AAC, FLAC, ALAC, OGG, M4A, AMR, MIDI
 - **Quality Control**: Choose between High, Medium, or Low quality
 - **Progress Tracking**: Real-time conversion progress display
