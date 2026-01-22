@@ -3,6 +3,7 @@ let currentFile = null;
 let outputBlob = null;
 let isConverting = false;
 let converterWindowId = null;
+let progressCheckInterval = null;
 
 // DOM Elements
 const uploadArea = document.getElementById('uploadArea');
@@ -27,20 +28,60 @@ const errorSection = document.getElementById('errorSection');
 const errorText = document.getElementById('errorText');
 const errorResetBtn = document.getElementById('errorResetBtn');
 
-// Format detection
-const VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg', 'mpg', 'm4v', '3gp'];
+// Format detection - Added .ts support
+const VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg', 'mpg', 'm4v', '3gp', 'ts'];
 const AUDIO_FORMATS = ['mp3', 'wav', 'aac', 'flac', 'alac', 'ogg', 'm4a', 'amr'];
 
 // Check if conversion is in progress on load
-chrome.runtime.sendMessage({ action: 'isConversionInProgress' }, (response) => {
-  if (chrome.runtime.lastError) {
-    console.log('Background script not ready:', chrome.runtime.lastError);
-    return;
+checkConversionStatus();
+
+function checkConversionStatus() {
+  chrome.runtime.sendMessage({ action: 'isConversionInProgress' }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.log('Background script not ready:', chrome.runtime.lastError);
+      return;
+    }
+    if (response && response.inProgress) {
+      isConverting = true;
+      showProgress(response.progress.status || 'Conversion in progress...');
+      progressFill.style.width = `${response.progress.percent || 0}%`;
+      startProgressMonitoring();
+    }
+  });
+}
+
+// Monitor progress from background
+function startProgressMonitoring() {
+  if (progressCheckInterval) {
+    clearInterval(progressCheckInterval);
   }
-  if (response && response.inProgress) {
-    showProgress('Conversion in progress...');
+  
+  progressCheckInterval = setInterval(() => {
+    chrome.runtime.sendMessage({ action: 'getProgress' }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        return;
+      }
+      
+      const progress = response.progress;
+      if (progress) {
+        progressFill.style.width = `${progress.percent || 0}%`;
+        progressText.textContent = progress.status || 'Converting...';
+        
+        if (progress.percent >= 100 || progress.status === 'complete') {
+          clearInterval(progressCheckInterval);
+          progressCheckInterval = null;
+        }
+      }
+    });
+  }, 500);
+}
+
+function stopProgressMonitoring() {
+  if (progressCheckInterval) {
+    clearInterval(progressCheckInterval);
+    progressCheckInterval = null;
   }
-});
+}
 
 // Prevent closing popup during conversion
 window.addEventListener('beforeunload', (e) => {
@@ -186,26 +227,20 @@ convertBtn.addEventListener('click', async () => {
     await getConverterWindow();
     
     // Wait for window to load
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 1500));
     
     const outputExt = outputFormat.value;
     const qualityLevel = quality.value;
     
-    progressText.textContent = 'Starting conversion... (Window will stay open in background)';
+    progressText.textContent = 'Starting conversion...';
     
-    // Start progress animation
-    let progress = 0;
-    const progressInterval = setInterval(() => {
-      if (progress < 90) {
-        progress += Math.random() * 5;
-        progressFill.style.width = `${Math.min(progress, 90)}%`;
-      }
-    }, 1000);
+    // Start progress monitoring
+    startProgressMonitoring();
     
     // Read file as array buffer
     const fileData = await currentFile.arrayBuffer();
     
-    progressText.textContent = 'Converting... You can close this popup now!';
+    progressText.textContent = 'Converting... You can close this popup!';
     
     // Send to converter window
     const response = await sendToConverter({
@@ -218,7 +253,7 @@ convertBtn.addEventListener('click', async () => {
       }
     });
     
-    clearInterval(progressInterval);
+    stopProgressMonitoring();
     
     if (!response.success) {
       throw new Error(response.error);
@@ -247,6 +282,8 @@ convertBtn.addEventListener('click', async () => {
   } catch (error) {
     console.error('Conversion error:', error);
     showError('Conversion failed: ' + error.message);
+    
+    stopProgressMonitoring();
     
     // Close converter window on error
     chrome.runtime.sendMessage({ action: 'closeConverterWindow' });
@@ -288,6 +325,7 @@ function resetConverter() {
   outputBlob = null;
   fileInput.value = '';
   isConverting = false;
+  stopProgressMonitoring();
   
   fileInfo.style.display = 'none';
   conversionSection.style.display = 'none';
@@ -305,3 +343,8 @@ function showError(message) {
   errorSection.style.display = 'block';
   errorText.textContent = message;
 }
+
+// Cleanup on popup close
+window.addEventListener('unload', () => {
+  stopProgressMonitoring();
+});

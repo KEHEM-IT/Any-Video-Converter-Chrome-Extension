@@ -4,11 +4,19 @@ console.log('Converter window loaded');
 let conversionData = null;
 let isProcessing = false;
 
-// Update status text
-function updateStatus(text) {
+// Update status text and notify background
+function updateStatus(text, percent = null) {
   const statusText = document.getElementById('statusText');
   if (statusText) {
     statusText.textContent = text;
+  }
+  
+  // Notify background script of progress
+  if (percent !== null) {
+    chrome.runtime.sendMessage({
+      action: 'updateProgress',
+      progress: { percent, status: text }
+    });
   }
 }
 
@@ -23,18 +31,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     isProcessing = true;
     conversionData = request.data;
     
-    updateStatus('Starting conversion...');
+    updateStatus('Starting conversion...', 0);
     
     handleConversion(request.data)
       .then(result => {
         isProcessing = false;
+        updateStatus('Conversion complete!', 100);
         sendResponse({ success: true, data: result });
-        updateStatus('Conversion complete!');
       })
       .catch(error => {
         isProcessing = false;
+        updateStatus('Conversion failed: ' + error.message, 0);
         sendResponse({ success: false, error: error.message });
-        updateStatus('Conversion failed: ' + error.message);
       });
     
     return true; // Keep channel open for async response
@@ -43,29 +51,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function handleConversion({ fileData, fileName, outputFormat, quality }) {
   try {
-    updateStatus('Loading file...');
+    updateStatus('Loading file...', 5);
     
     // Recreate blob from transferred data
     const blob = new Blob([fileData], { type: getMimeTypeFromFileName(fileName) });
     
     // Determine if source is video or audio
-    const isSourceVideo = blob.type.startsWith('video/');
+    const isSourceVideo = blob.type.startsWith('video/') || fileName.toLowerCase().endsWith('.ts');
     const isTargetAudio = ['mp3', 'wav', 'ogg', 'm4a'].includes(outputFormat);
     
     let resultBlob;
     
     if (isTargetAudio && isSourceVideo) {
-      updateStatus('Extracting audio from video...');
+      updateStatus('Extracting audio from video...', 10);
       resultBlob = await convertVideoToAudio(blob, outputFormat, quality);
     } else if (isTargetAudio) {
-      updateStatus('Converting audio...');
+      updateStatus('Converting audio...', 10);
       resultBlob = await convertAudioToAudio(blob, outputFormat, quality);
     } else {
-      updateStatus('Converting video...');
+      updateStatus('Converting video...', 10);
       resultBlob = await convertVideoToVideo(blob, outputFormat, quality);
     }
     
-    updateStatus('Finalizing...');
+    updateStatus('Finalizing...', 95);
     
     // Convert blob to array buffer for transfer
     const arrayBuffer = await resultBlob.arrayBuffer();
@@ -84,31 +92,70 @@ async function handleConversion({ fileData, fileName, outputFormat, quality }) {
 // Convert video to audio (extract audio track)
 async function convertVideoToAudio(videoBlob, targetFormat, quality) {
   return new Promise(async (resolve, reject) => {
+    let video = null;
+    let audioCtx = null;
+    let recorder = null;
+    
     try {
-      updateStatus('Creating video element...');
+      updateStatus('Creating video element...', 15);
       
-      const video = document.createElement('video');
-      video.src = URL.createObjectURL(videoBlob);
+      video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.preload = 'auto';
+      
+      // Create object URL
+      const videoUrl = URL.createObjectURL(videoBlob);
+      video.src = videoUrl;
       video.muted = false;
-      video.style.display = 'none';
+      video.volume = 1.0;
+      
+      // Add to document (required for some browsers)
+      video.style.position = 'fixed';
+      video.style.top = '-9999px';
+      video.style.left = '-9999px';
+      video.style.width = '1px';
+      video.style.height = '1px';
       document.body.appendChild(video);
       
-      await new Promise((res, rej) => {
-        video.onloadedmetadata = res;
-        video.onerror = () => rej(new Error('Failed to load video'));
-        setTimeout(() => rej(new Error('Video load timeout')), 30000);
-      });
+      // Wait for metadata with timeout
+      await Promise.race([
+        new Promise((res) => {
+          video.onloadedmetadata = res;
+        }),
+        new Promise((_, rej) => 
+          setTimeout(() => rej(new Error('Video metadata load timeout (30s)')), 30000)
+        )
+      ]);
       
-      updateStatus('Extracting audio...');
+      // Wait for video to be ready
+      await Promise.race([
+        new Promise((res) => {
+          if (video.readyState >= 2) {
+            res();
+          } else {
+            video.oncanplay = res;
+          }
+        }),
+        new Promise((_, rej) => 
+          setTimeout(() => rej(new Error('Video ready timeout (30s)')), 30000)
+        )
+      ]);
+      
+      updateStatus('Extracting audio...', 20);
       
       // Create audio context and extract audio
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaElementSource(video);
       const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
       
       // Get audio stream
       const audioStream = dest.stream;
+      
+      // Check if audio stream has tracks
+      if (audioStream.getAudioTracks().length === 0) {
+        throw new Error('No audio track found in video');
+      }
       
       // Determine MIME type
       let mimeType = getAudioMimeType(targetFormat);
@@ -120,14 +167,13 @@ async function convertVideoToAudio(videoBlob, targetFormat, quality) {
         } else if (MediaRecorder.isTypeSupported('audio/webm')) {
           mimeType = 'audio/webm';
         } else {
-          reject(new Error('No supported audio format found'));
-          return;
+          throw new Error('No supported audio format found');
         }
       }
       
       const audioBitsPerSecond = getAudioBitrate(quality);
       const chunks = [];
-      const recorder = new MediaRecorder(audioStream, { 
+      recorder = new MediaRecorder(audioStream, { 
         mimeType,
         audioBitsPerSecond 
       });
@@ -140,43 +186,72 @@ async function convertVideoToAudio(videoBlob, targetFormat, quality) {
       
       recorder.onstop = () => {
         const resultBlob = new Blob(chunks, { type: mimeType });
-        URL.revokeObjectURL(video.src);
-        document.body.removeChild(video);
-        audioCtx.close();
+        URL.revokeObjectURL(videoUrl);
+        if (video.parentNode) {
+          document.body.removeChild(video);
+        }
+        if (audioCtx && audioCtx.state !== 'closed') {
+          audioCtx.close();
+        }
         resolve(resultBlob);
       };
       
       recorder.onerror = (e) => {
-        document.body.removeChild(video);
-        reject(new Error('Audio extraction failed'));
+        if (video.parentNode) {
+          document.body.removeChild(video);
+        }
+        reject(new Error('Recording failed: ' + (e.error || 'Unknown error')));
       };
       
-      updateStatus('Recording audio...');
+      updateStatus('Recording audio...', 25);
       
-      // Start recording and play video
+      // Start recording
       recorder.start(100);
-      video.play().catch(e => {
-        reject(new Error('Failed to play video: ' + e.message));
-      });
+      
+      // Start playing
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          console.error('Play error:', e);
+        });
+      }
       
       // Update progress
       const progressInterval = setInterval(() => {
-        if (video.duration) {
-          const progress = (video.currentTime / video.duration * 100).toFixed(0);
-          updateStatus(`Recording audio... ${progress}%`);
+        if (video.duration && !isNaN(video.duration)) {
+          const progress = 25 + Math.floor((video.currentTime / video.duration) * 65);
+          updateStatus(`Recording audio... ${Math.floor((video.currentTime / video.duration) * 100)}%`, progress);
         }
       }, 500);
       
       // Stop when video ends
       video.onended = () => {
         clearInterval(progressInterval);
+        updateStatus('Finishing recording...', 90);
         setTimeout(() => {
-          recorder.stop();
+          if (recorder && recorder.state !== 'inactive') {
+            recorder.stop();
+          }
           audioStream.getTracks().forEach(track => track.stop());
         }, 500);
       };
       
+      // Error handling
+      video.onerror = () => {
+        clearInterval(progressInterval);
+        if (recorder && recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+        reject(new Error('Video playback error: ' + (video.error ? video.error.message : 'Unknown error')));
+      };
+      
     } catch (error) {
+      if (video && video.parentNode) {
+        document.body.removeChild(video);
+      }
+      if (audioCtx && audioCtx.state !== 'closed') {
+        audioCtx.close();
+      }
       reject(error);
     }
   });
@@ -185,20 +260,32 @@ async function convertVideoToAudio(videoBlob, targetFormat, quality) {
 // Convert audio to audio
 async function convertAudioToAudio(audioBlob, targetFormat, quality) {
   return new Promise(async (resolve, reject) => {
+    let audio = null;
+    let audioCtx = null;
+    
     try {
-      const audio = document.createElement('audio');
-      audio.src = URL.createObjectURL(audioBlob);
-      audio.style.display = 'none';
+      audio = document.createElement('audio');
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'auto';
+      
+      const audioUrl = URL.createObjectURL(audioBlob);
+      audio.src = audioUrl;
+      
+      audio.style.position = 'fixed';
+      audio.style.top = '-9999px';
       document.body.appendChild(audio);
       
-      await new Promise((res, rej) => {
-        audio.onloadedmetadata = res;
-        audio.onerror = () => rej(new Error('Failed to load audio'));
-        setTimeout(() => rej(new Error('Audio load timeout')), 30000);
-      });
+      await Promise.race([
+        new Promise((res) => {
+          audio.onloadedmetadata = res;
+        }),
+        new Promise((_, rej) => 
+          setTimeout(() => rej(new Error('Audio load timeout')), 30000)
+        )
+      ]);
       
       // Create audio context
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaElementSource(audio);
       const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
@@ -213,8 +300,7 @@ async function convertAudioToAudio(audioBlob, targetFormat, quality) {
         } else if (MediaRecorder.isTypeSupported('audio/webm')) {
           mimeType = 'audio/webm';
         } else {
-          reject(new Error('No supported audio format found'));
-          return;
+          throw new Error('No supported audio format found');
         }
       }
       
@@ -233,27 +319,37 @@ async function convertAudioToAudio(audioBlob, targetFormat, quality) {
       
       recorder.onstop = () => {
         const resultBlob = new Blob(chunks, { type: mimeType });
-        URL.revokeObjectURL(audio.src);
-        document.body.removeChild(audio);
-        audioCtx.close();
+        URL.revokeObjectURL(audioUrl);
+        if (audio.parentNode) {
+          document.body.removeChild(audio);
+        }
+        if (audioCtx && audioCtx.state !== 'closed') {
+          audioCtx.close();
+        }
         resolve(resultBlob);
       };
       
       recorder.onerror = (e) => {
-        document.body.removeChild(audio);
+        if (audio.parentNode) {
+          document.body.removeChild(audio);
+        }
         reject(new Error('Audio conversion failed'));
       };
       
       recorder.start(100);
-      audio.play().catch(e => {
-        reject(new Error('Failed to play audio: ' + e.message));
-      });
+      
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          console.error('Audio play error:', e);
+        });
+      }
       
       // Update progress
       const progressInterval = setInterval(() => {
-        if (audio.duration) {
-          const progress = (audio.currentTime / audio.duration * 100).toFixed(0);
-          updateStatus(`Converting... ${progress}%`);
+        if (audio.duration && !isNaN(audio.duration)) {
+          const progress = 25 + Math.floor((audio.currentTime / audio.duration) * 65);
+          updateStatus(`Converting... ${Math.floor((audio.currentTime / audio.duration) * 100)}%`, progress);
         }
       }, 500);
       
@@ -266,6 +362,12 @@ async function convertAudioToAudio(audioBlob, targetFormat, quality) {
       };
       
     } catch (error) {
+      if (audio && audio.parentNode) {
+        document.body.removeChild(audio);
+      }
+      if (audioCtx && audioCtx.state !== 'closed') {
+        audioCtx.close();
+      }
       reject(error);
     }
   });
@@ -274,29 +376,41 @@ async function convertAudioToAudio(audioBlob, targetFormat, quality) {
 // Convert video to video
 async function convertVideoToVideo(videoBlob, targetFormat, quality) {
   return new Promise(async (resolve, reject) => {
+    let video = null;
+    let audioCtx = null;
+    
     try {
-      const video = document.createElement('video');
-      video.src = URL.createObjectURL(videoBlob);
+      video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.preload = 'auto';
+      
+      const videoUrl = URL.createObjectURL(videoBlob);
+      video.src = videoUrl;
       video.muted = true;
-      video.style.display = 'none';
+      
+      video.style.position = 'fixed';
+      video.style.top = '-9999px';
       document.body.appendChild(video);
       
-      await new Promise((res, rej) => {
-        video.onloadedmetadata = res;
-        video.onerror = () => rej(new Error('Failed to load video'));
-        setTimeout(() => rej(new Error('Video load timeout')), 30000);
-      });
+      await Promise.race([
+        new Promise((res) => {
+          video.onloadedmetadata = res;
+        }),
+        new Promise((_, rej) => 
+          setTimeout(() => rej(new Error('Video load timeout')), 30000)
+        )
+      ]);
       
       // Create canvas for video frames
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
       const ctx = canvas.getContext('2d');
       
       const canvasStream = canvas.captureStream(30);
       
       // Add audio if present
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaElementSource(video);
       const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
@@ -314,8 +428,7 @@ async function convertVideoToVideo(videoBlob, targetFormat, quality) {
         } else if (MediaRecorder.isTypeSupported('video/webm')) {
           mimeType = 'video/webm';
         } else {
-          reject(new Error('No supported video format found'));
-          return;
+          throw new Error('No supported video format found');
         }
       }
       
@@ -337,21 +450,31 @@ async function convertVideoToVideo(videoBlob, targetFormat, quality) {
       
       recorder.onstop = () => {
         const resultBlob = new Blob(chunks, { type: mimeType });
-        URL.revokeObjectURL(video.src);
-        document.body.removeChild(video);
-        audioCtx.close();
+        URL.revokeObjectURL(videoUrl);
+        if (video.parentNode) {
+          document.body.removeChild(video);
+        }
+        if (audioCtx && audioCtx.state !== 'closed') {
+          audioCtx.close();
+        }
         resolve(resultBlob);
       };
       
       recorder.onerror = (e) => {
-        document.body.removeChild(video);
+        if (video.parentNode) {
+          document.body.removeChild(video);
+        }
         reject(new Error('Video conversion failed'));
       };
       
       recorder.start(100);
-      video.play().catch(e => {
-        reject(new Error('Failed to play video: ' + e.message));
-      });
+      
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          console.error('Video play error:', e);
+        });
+      }
       
       // Draw frames
       const drawFrame = () => {
@@ -364,9 +487,9 @@ async function convertVideoToVideo(videoBlob, targetFormat, quality) {
       
       // Update progress
       const progressInterval = setInterval(() => {
-        if (video.duration) {
-          const progress = (video.currentTime / video.duration * 100).toFixed(0);
-          updateStatus(`Converting... ${progress}%`);
+        if (video.duration && !isNaN(video.duration)) {
+          const progress = 25 + Math.floor((video.currentTime / video.duration) * 65);
+          updateStatus(`Converting... ${Math.floor((video.currentTime / video.duration) * 100)}%`, progress);
         }
       }, 500);
       
@@ -379,6 +502,12 @@ async function convertVideoToVideo(videoBlob, targetFormat, quality) {
       };
       
     } catch (error) {
+      if (video && video.parentNode) {
+        document.body.removeChild(video);
+      }
+      if (audioCtx && audioCtx.state !== 'closed') {
+        audioCtx.close();
+      }
       reject(error);
     }
   });
@@ -393,6 +522,7 @@ function getMimeTypeFromFileName(fileName) {
     mkv: 'video/x-matroska',
     avi: 'video/x-msvideo',
     mov: 'video/quicktime',
+    ts: 'video/mp2t',
     mp3: 'audio/mpeg',
     wav: 'audio/wav',
     ogg: 'audio/ogg',
