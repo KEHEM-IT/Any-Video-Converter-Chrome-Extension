@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Any Video Converter</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🎬 Any Video Converter</h1>
+    <p class="subtitle">Convert videos & audio locally in your browser</p>
+    
+    <div class="upload-section">
+      <div class="upload-area" id="uploadArea">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        <p>Click to upload or drag & drop</p>
+        <p class="file-types">Video or Audio file</p>
+        <input type="file" id="fileInput" accept="video/*,audio/*" hidden>
+      </div>
+    </div>
+
+    <div class="file-info" id="fileInfo" style="display: none;">
+      <div class="info-row">
+        <span class="label">File:</span>
+        <span id="fileName"></span>
+      </div>
+      <div class="info-row">
+        <span class="label">Format:</span>
+        <span id="fileFormat"></span>
+      </div>
+      <div class="info-row">
+        <span class="label">Size:</span>
+        <span id="fileSize"></span>
+      </div>
+    </div>
+
+    <div class="conversion-section" id="conversionSection" style="display: none;">
+      <label for="outputFormat">Convert to:</label>
+      <select id="outputFormat">
+        <optgroup label="Video Formats">
+          <option value="mp4">MP4</option>
+          <option value="webm">WebM</option>
+          <option value="mkv">MKV</option>
+        </optgroup>
+        <optgroup label="Audio Formats">
+          <option value="mp3">MP3</option>
+          <option value="wav">WAV</option>
+          <option value="ogg">OGG</option>
+        </optgroup>
+      </select>
+
+      <div class="quality-section">
+        <label for="quality">Quality:</label>
+        <select id="quality">
+          <option value="high">High Quality</option>
+          <option value="medium" selected>Medium Quality</option>
+          <option value="low">Low Quality (Smaller File)</option>
+        </select>
+      </div>
+
+      <button id="convertBtn" class="convert-btn">
+        <span>Convert</span>
+      </button>
+    </div>
+
+    <div class="progress-section" id="progressSection" style="display: none;">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <p class="progress-text" id="progressText">Initializing...</p>
+    </div>
+
+    <div class="result-section" id="resultSection" style="display: none;">
+      <div class="success-icon">✓</div>
+      <p class="success-text">Conversion completed!</p>
+      <div class="result-info">
+        <div class="info-row">
+          <span class="label">Output:</span>
+          <span id="outputFileName"></span>
+        </div>
+        <div class="info-row">
+          <span class="label">Size:</span>
+          <span id="outputFileSize"></span>
+        </div>
+      </div>
+      <button id="downloadBtn" class="download-btn">
+        <span>Download File</span>
+      </button>
+      <button id="resetBtn" class="reset-btn">Convert Another File</button>
+    </div>
+
+    <div class="error-section" id="errorSection" style="display: none;">
+      <div class="error-icon">✕</div>
+      <p class="error-text" id="errorText"></p>
+      <button id="errorResetBtn" class="reset-btn">Try Again</button>
+    </div>
+
+    <div class="footer">
+      <p>✨ Conversions run in background - you can close the popup!</p>
+      <p>🎵 Video to MP3/Audio extraction fully supported</p>
+      <p>🔒 All conversions happen locally. No data is uploaded.</p>
+      <p style="font-size: 11px; color: #888;">Note: Output format may be WebM/OGG due to browser limitations</p>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
