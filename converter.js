@@ -117,17 +117,19 @@ async function convertVideoToAudio(videoBlob, targetFormat, quality) {
       video.style.height = '1px';
       document.body.appendChild(video);
       
-      // Wait for metadata with timeout
+      // Wait for metadata with dynamic timeout based on file size
+      const metadataTimeout = Math.max(60000, Math.min(videoBlob.size / 10000, 300000)); // 60s to 5min
       await Promise.race([
         new Promise((res) => {
           video.onloadedmetadata = res;
         }),
         new Promise((_, rej) => 
-          setTimeout(() => rej(new Error('Video metadata load timeout (30s)')), 30000)
+          setTimeout(() => rej(new Error(`Video metadata load timeout (${Math.floor(metadataTimeout/1000)}s) - File may be too large or corrupt`)), metadataTimeout)
         )
       ]);
       
-      // Wait for video to be ready
+      // Wait for video to be ready with dynamic timeout
+      const readyTimeout = Math.max(60000, Math.min(videoBlob.size / 10000, 300000)); // 60s to 5min
       await Promise.race([
         new Promise((res) => {
           if (video.readyState >= 2) {
@@ -137,7 +139,7 @@ async function convertVideoToAudio(videoBlob, targetFormat, quality) {
           }
         }),
         new Promise((_, rej) => 
-          setTimeout(() => rej(new Error('Video ready timeout (30s)')), 30000)
+          setTimeout(() => rej(new Error(`Video ready timeout (${Math.floor(readyTimeout/1000)}s) - File may be too large or corrupt`)), readyTimeout)
         )
       ]);
       
@@ -275,12 +277,14 @@ async function convertAudioToAudio(audioBlob, targetFormat, quality) {
       audio.style.top = '-9999px';
       document.body.appendChild(audio);
       
+      // Dynamic timeout for audio files
+      const audioTimeout = Math.max(60000, Math.min(audioBlob.size / 10000, 300000)); // 60s to 5min
       await Promise.race([
         new Promise((res) => {
           audio.onloadedmetadata = res;
         }),
         new Promise((_, rej) => 
-          setTimeout(() => rej(new Error('Audio load timeout')), 30000)
+          setTimeout(() => rej(new Error(`Audio load timeout (${Math.floor(audioTimeout/1000)}s) - File may be too large or corrupt`)), audioTimeout)
         )
       ]);
       
@@ -392,12 +396,14 @@ async function convertVideoToVideo(videoBlob, targetFormat, quality) {
       video.style.top = '-9999px';
       document.body.appendChild(video);
       
+      // Dynamic timeout for video-to-video conversion
+      const v2vTimeout = Math.max(60000, Math.min(videoBlob.size / 10000, 300000)); // 60s to 5min
       await Promise.race([
         new Promise((res) => {
           video.onloadedmetadata = res;
         }),
         new Promise((_, rej) => 
-          setTimeout(() => rej(new Error('Video load timeout')), 30000)
+          setTimeout(() => rej(new Error(`Video load timeout (${Math.floor(v2vTimeout/1000)}s) - File may be too large or corrupt`)), v2vTimeout)
         )
       ]);
       

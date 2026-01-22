@@ -140,6 +140,12 @@ function handleFile(file) {
   fileFormat.textContent = extension.toUpperCase();
   fileSize.textContent = formatBytes(file.size);
   
+  // Warn about large files
+  if (file.size > 100 * 1024 * 1024) { // > 100MB
+    const sizeMB = Math.round(file.size / (1024 * 1024));
+    console.log(`Large file detected: ${sizeMB}MB - Conversion may take several minutes`);
+  }
+  
   // Show sections
   fileInfo.style.display = 'block';
   conversionSection.style.display = 'block';
